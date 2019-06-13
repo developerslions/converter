@@ -1,0 +1,13 @@
+{
+    "name": "devlion/converter-php-client",
+    "type": "library",
+    "description": "Devlion Converter API client for PHP",
+    "require": {
+        "php": ">=5.5",
+        "guzzlehttp/guzzle": "^6.3"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": { "Devlion\\": "src/" }
+    }
+}
