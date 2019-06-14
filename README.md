@@ -47,7 +47,7 @@ You can find out more about Composer at [getcomposer.org](http://getcomposer.org
 Example
 -------
 
-The following code is an example on how to convert a Microsoft Access ACCDB file to a ZIP-archive of CSV files. You can replace 'k=token' with the Customer Token that you purchased.
+The following code is an example on how to convert a Microsoft Sql Server file (.MDF) to a ZIP-archive of CSV files. You can replace 'k=token' with the Customer Token that you purchased.
 
 ```php
 use Devlion\Converter\Client;

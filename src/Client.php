@@ -76,7 +76,7 @@ class Client
             unlink($zipFile);
         }
 
-        $response = $this->guzzleClient->request('POST', 'users/upload' . $queryString, [
+        $response = $this->guzzleClient->request('POST', 'converter/upload' . $queryString, [
             'multipart' => $parts,
             'sink' => $zipFile,
             'headers' => [
