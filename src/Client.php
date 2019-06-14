@@ -1,7 +1,7 @@
 <?php
 
 /*
- * This file is part of biosense project
+ * This file is part of converter project
  * (c) Devlion Team
  * @link https://devlion.co
  */
