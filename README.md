@@ -54,7 +54,7 @@ use Devlion\Converter\Client;
 
 $client = new Client('token');
 
-$inputFiles = ['/tmp/access.accdb'];
+$inputFiles = ['/samples/sample.mdf'];
 
 $outputFile = $client->convertAndReceiveZip($inputFiles);
 
