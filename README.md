@@ -11,7 +11,7 @@ The recommended method to install is through [Composer](http://getcomposer.org).
     ```json
     {
         "require": {
-            "devlion/converter-php-client": "dev-master"
+            "devlion/converter-php-client": "*"
         }
     }
     ```
