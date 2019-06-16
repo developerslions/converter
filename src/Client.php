@@ -1,57 +1,49 @@
 <?php
 
 /*
- * This file is part of converter project
+ * This file is part of biosense project
  * (c) Devlion Team
  * @link https://devlion.co
  */
 
 namespace Devlion\Converter;
 
-use GuzzleHttp\Client as GuzzleClient;
 use Devlion\Converter\Exception\ConversionException;
 use Devlion\Converter\Exception\InvalidArgumentException;
+use GuzzleHttp\Client as GuzzleClient;
 use ZipArchive;
 
 class Client
 {
     private $token;
     private $guzzleClient;
+    private $zipFile;
+    private $extractedDirectory;
 
     public function __construct($token)
     {
         $this->token = $token;
-
         $this->guzzleClient = new GuzzleClient([
             'base_uri' => 'https://api.convertor.devlion.co/',
         ]);
     }
 
-    public function getCacheDir()
+    public function __destruct()
     {
-        $cacheDir = sys_get_temp_dir() . '/.devlion-converter-cache';
-
-        if (!file_exists($cacheDir)) {
-            mkdir($cacheDir);
+        if (file_exists($this->zipFile)) {
+            unlink($this->zipFile);
         }
-
-        return $cacheDir;
     }
 
-    public function getInputFilesHash(array $inputFiles)
-    {
-        $this->validateInputFiles($inputFiles);
-
-        $dataToHash = '';
-
-        foreach ($inputFiles as $inputFile) {
-            $dataToHash .= basename($inputFile) . '=' . sha1_file($inputFile) . "\n";
-        }
-
-        return sha1($dataToHash);
-    }
-
-    public function convertAndReceiveZip(array $inputFiles, array $options = [])
+    /**
+     * @param array $inputFiles
+     * @param array $options
+     *
+     * @throws \GuzzleHttp\Exception\GuzzleException
+     *
+     * @return Client
+     */
+    public function convert(array $inputFiles, array $options = []): Client
     {
         $this->validateInputFiles($inputFiles);
 
@@ -70,15 +62,16 @@ class Client
             $queryString = '?' . http_build_query($options);
         }
 
-        $zipFile = $this->getCacheDir() . '/' . $this->getInputFilesHash($inputFiles) . '.zip';
+        $this->extractedDirectory = $this->getCacheDir() . '/' . $this->getInputFilesHash($inputFiles);
+        $this->zipFile = $this->extractedDirectory . '.zip';
 
-        if (file_exists($zipFile)) {
-            unlink($zipFile);
+        if (file_exists($this->zipFile)) {
+            unlink($this->zipFile);
         }
 
         $response = $this->guzzleClient->request('POST', 'converter/upload' . $queryString, [
             'multipart' => $parts,
-            'sink' => $zipFile,
+            'sink' => $this->zipFile,
             'headers' => [
                 'Authorization' => "Bearer {$this->token}",
                 'Accept' => 'application/zip',
@@ -86,67 +79,124 @@ class Client
         ]);
 
         if ('application/json' === $response->getHeader('Content-Type')[0]) {
-            $json = json_decode(file_get_contents($zipFile), true);
-            unlink($zipFile);
+            $json = json_decode(file_get_contents($this->zipFile), true);
+            unlink($this->zipFile);
 
             throw new ConversionException($json['error']);
         }
 
-        return $zipFile;
+        return $this;
     }
 
-    public function convertAndReceiveCsvDirectory(array $inputFiles)
+    /**
+     * @param null|string $destination
+     *
+     * @return Client
+     */
+    public function extract(string $destination = null): Client
     {
-        $this->validateInputFiles($inputFiles);
+        $this->extractedDirectory = $destination ?? $this->extractedDirectory;
+        $directoryDoneMarker = $this->extractedDirectory . '/done.marker';
 
-        $csvDirectory = $this->getCacheDir() . '/' . $this->getInputFilesHash($inputFiles) . '-csv';
-        $csvDirectoryDoneMarker = $csvDirectory . '/done.marker';
-
-        if (file_exists($csvDirectory)) {
-            if (file_exists($csvDirectoryDoneMarker)) {
-                return $csvDirectory;
+        if (file_exists($this->extractedDirectory)) {
+            if (file_exists($directoryDoneMarker)) {
+                return $this;
             }
 
-            exec('rm -r ' . escapeshellarg($csvDirectory));
+            exec('rm -r ' . escapeshellarg($this->extractedDirectory));
         }
 
-        mkdir($csvDirectory);
+        mkdir($this->extractedDirectory);
 
-        $zipFile = $this->convertAndReceiveZip($inputFiles);
+        $this->extractFiles($this->zipFile, $this->extractedDirectory);
 
-        $zipArchive = new ZipArchive();
-        $zipArchive->open($zipFile);
-        $zipArchive->extractTo($csvDirectory);
+        file_put_contents($directoryDoneMarker, '1');
 
-        unlink($zipFile);
-
-        file_put_contents($csvDirectoryDoneMarker, '1');
-
-        return $csvDirectory;
+        return $this;
     }
 
-    public function getDatabaseTables(array $inputFiles)
+    /**
+     * @return string
+     */
+    public function getZipFilePath(): string
     {
-        $this->validateInputFiles($inputFiles);
+        return $this->zipFile;
+    }
 
-        $csvDirectory = $this->convertAndReceiveCsvDirectory($inputFiles);
+    /**
+     * @return string
+     */
+    public function getExtractedDirectory(): string
+    {
+        return $this->extractedDirectory;
+    }
 
+    /**
+     * @param bool $fullPath
+     *
+     * @return array
+     */
+    public function getDatabases($fullPath = false): array
+    {
+        $databases = [];
+
+        if ($dirs = glob($this->extractedDirectory . '/*', GLOB_ONLYDIR)) {
+            foreach ($dirs as $nestedDirectory) {
+                if ($fullPath) {
+                    $databases[basename($nestedDirectory)] = $nestedDirectory;
+                } else {
+                    $databases[basename($nestedDirectory)] = basename($nestedDirectory);
+                }
+            }
+        }
+
+        return $databases;
+    }
+
+    /**
+     * @param string $database
+     * @param bool   $fullPath
+     *
+     * @return array
+     */
+    public function getTables(string $database, $fullPath = false): array
+    {
+        $databases = $this->getDatabases(true);
         $tables = [];
 
-        foreach ($this->getCsvFilesOfDirectory($csvDirectory) as $file) {
-            $tables[] = pathinfo($file, PATHINFO_FILENAME);
+        if (array_key_exists($database, $databases)) {
+            foreach ($this->getCsvFilesOfDirectory($databases[$database]) as $file) {
+                $fileInfo = $fileKey = pathinfo($file, PATHINFO_FILENAME);
+
+                if ($fullPath) {
+                    $fileInfo = $databases[$database] . '/' . $file;
+                }
+
+                $tables[$fileKey] = $fileInfo;
+            }
         }
 
         return $tables;
     }
 
-    public function getDatabaseTableRows(array $inputFiles, $table)
+    /**
+     * @param string $database
+     * @param string $table
+     *
+     * @return array
+     */
+    public function getTableRows(string $database, string $table): array
     {
-        $this->validateInputFiles($inputFiles);
+        $tableFile = null;
+        $tables = $this->getTables($database, true);
 
-        $csvDirectory = $this->convertAndReceiveCsvDirectory($inputFiles);
+        if (empty($tables)) {
+            throw new InvalidArgumentException('Database does not exist: ' . $table);
+        }
 
-        $tableFile = $csvDirectory . '/' . $table . '.csv';
+        if (array_key_exists($table, $tables) || array_key_exists(strtoupper($table), $tables)) {
+            $tableFile = $tables[$table];
+        }
 
         if (!file_exists($tableFile)) {
             throw new InvalidArgumentException('Table does not exist: ' . $table);
@@ -167,6 +217,142 @@ class Client
         return $rows;
     }
 
+    private function getCacheDir()
+    {
+        $cacheDir = sys_get_temp_dir() . '/.devlion-converter-cache';
+
+        if (!file_exists($cacheDir)) {
+            mkdir($cacheDir);
+        }
+
+        return $cacheDir;
+    }
+
+    private function getInputFilesHash(array $inputFiles)
+    {
+        $this->validateInputFiles($inputFiles);
+
+        $dataToHash = '';
+
+        foreach ($inputFiles as $inputFile) {
+            $dataToHash .= basename($inputFile) . '=' . sha1_file($inputFile) . "\n";
+        }
+
+        return sha1($dataToHash);
+    }
+
+    public function getDatabasesTables($fullPath = false)
+    {
+        $tables = [];
+
+        if ($dirs = glob($this->extractedDirectory . '/*', GLOB_ONLYDIR)) {
+            foreach ($dirs as $nestedDirectory) {
+                $tables[basename($nestedDirectory)] = [];
+
+                foreach ($this->getCsvFilesOfDirectory($nestedDirectory) as $file) {
+                    $fileInfo = $fileKey = pathinfo($file, PATHINFO_FILENAME);
+
+                    if ($fullPath) {
+                        $fileInfo = $nestedDirectory . '/' . $file;
+                    }
+
+                    $tables[basename($nestedDirectory)][$fileKey] = $fileInfo;
+                }
+            }
+        }
+
+        return $tables;
+    }
+
+    public function getDatabasesTableRows($table)
+    {
+        $rows = [];
+        $tableFile = null;
+        $databases = $this->getDatabasesTables(true);
+
+        foreach ($databases as $database => $tables) {
+            if (array_key_exists($table, $tables)) {
+                $rows[$database] = [];
+
+
+                if (!file_exists($tables[$table])) {
+                    continue;
+                }
+
+                $h = fopen($tables[$table], 'r');
+
+                if (false === $h) {
+                    continue;
+                }
+
+                while (false !== ($row = fgetcsv($h, 0, ','))) {
+                    $rows[$database][] = $row;
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param $zipFile
+     * @param $destination
+     */
+    private function extractFiles($zipFile, $destination)
+    {
+        if (!file_exists($destination)) {
+            mkdir($destination);
+        }
+
+        $zipArchive = new ZipArchive();
+        $zipArchive->open($zipFile);
+        $zipArchive->extractTo($destination);
+
+        unlink($zipFile);
+
+        if ($nestedArchives = glob($destination . '/*.zip')) {
+            foreach ($nestedArchives as $archive) {
+                $nested = $this->baseName($this->strAfter($archive, '_'), '.zip');
+                $this->extractFiles($archive, $destination . '/' . $nested);
+            }
+        }
+    }
+
+    /**
+     * @param $filePath
+     * @param string $ext
+     *
+     * @return string
+     */
+    private function baseName($filePath, $ext = '.'): string
+    {
+        return strstr($filePath, $ext, true);
+    }
+
+    /**
+     * @param $subject
+     * @param $search
+     *
+     * @return string
+     */
+    private function strAfter($subject, $search): string
+    {
+        if ('' == $search) {
+            return $subject;
+        }
+
+        $pos = strpos($subject, $search);
+
+        if (false === $pos) {
+            return $subject;
+        }
+
+        return substr($subject, $pos + strlen($search));
+    }
+
+    /**
+     * @param array $files
+     */
     private function validateInputFiles(array $files)
     {
         foreach ($files as $file) {
@@ -176,7 +362,12 @@ class Client
         }
     }
 
-    private function getCsvFilesOfDirectory($dir = '.')
+    /**
+     * @param string $dir
+     *
+     * @return array
+     */
+    private function getCsvFilesOfDirectory($dir = '.'): array
     {
         $files = [];
 
@@ -186,7 +377,7 @@ class Client
         }
 
         while (false !== ($file = readdir($dh))) {
-            if ('.' == $file or '..' == $file or '.csv' !== substr($file, -4)) {
+            if ('.' == $file || '..' == $file || '.csv' !== substr($file, -4)) {
                 continue;
             }
 
